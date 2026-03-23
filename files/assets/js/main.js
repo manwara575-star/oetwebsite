@@ -1,4 +1,4 @@
-/***************************************************
+﻿/***************************************************
 ==================== JS INDEX ======================
 ****************************************************
 01. sal js
@@ -62,56 +62,379 @@ sal();
 
 
 
-	
+;(function (window, document) {
+    "use strict";
+
+    var scrollManager = {
+        lenis: null,
+        isReady: false,
+        isStopped: false,
+        listeners: [],
+        observer: null,
+        ticker: null,
+        excludedSelector: [
+            "[data-lenis-prevent]",
+            "[data-scroll-island]",
+            "[data-scroll-lock]",
+            ".vl-offcanvas",
+            ".vl-offcanvas-wrapper",
+            ".vl-header-search-bar",
+            ".vl-offcanvas-overlay",
+            ".mfp-wrap",
+            ".mfp-container",
+            ".mfp-content",
+            ".mfp-iframe-holder",
+            ".contact__maps",
+            ".contact__maps2",
+            ".nice-select .list",
+            ".oet-contact-widget__panel",
+            ".oet-contact-widget__messages"
+        ].join(", "),
+        prefersReducedMotion: !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches),
+        isTouchDevice: !!((window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || navigator.maxTouchPoints > 0),
+        getScrollY: function () {
+            if (this.lenis && typeof this.lenis.scroll === "number") {
+                return this.lenis.scroll;
+            }
+
+            return window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+        },
+        getHeaderOffset: function () {
+            var header = document.getElementById("vl-header-sticky");
+            return header ? Math.round(header.getBoundingClientRect().height) : 0;
+        },
+        onScroll: function (callback) {
+            if (typeof callback !== "function") {
+                return function () {};
+            }
+
+            this.listeners.push(callback);
+
+            return function () {
+                scrollManager.listeners = scrollManager.listeners.filter(function (listener) {
+                    return listener !== callback;
+                });
+            };
+        },
+        emitScroll: function () {
+            var scrollY = this.getScrollY();
+            this.listeners.forEach(function (listener) {
+                listener(scrollY);
+            });
+        },
+        markPreventElements: function (root) {
+            var scope = root && typeof root.querySelectorAll === "function" ? root : document;
+            var candidates = scope.querySelectorAll(this.excludedSelector);
+            candidates.forEach(function (element) {
+                element.setAttribute("data-lenis-prevent", "");
+            });
+
+            scope.querySelectorAll("iframe").forEach(function (frame) {
+                if (frame.closest(".contact__maps, .contact__maps2, .mfp-wrap, .mfp-container, .vl-offcanvas, .vl-header-search-bar")) {
+                    frame.setAttribute("data-lenis-prevent", "");
+                }
+            });
+        },
+        start: function () {
+            if (this.lenis && this.isStopped) {
+                this.lenis.start();
+                this.isStopped = false;
+            }
+        },
+        stop: function () {
+            if (this.lenis && !this.isStopped) {
+                this.lenis.stop();
+                this.isStopped = true;
+            }
+        },
+        refresh: function () {
+            if (this.lenis && typeof this.lenis.resize === "function") {
+                this.lenis.resize();
+            }
+
+            if (window.ScrollTrigger && typeof window.ScrollTrigger.refresh === "function") {
+                window.ScrollTrigger.refresh();
+            }
+
+            this.emitScroll();
+        },
+        scrollTo: function (target, options) {
+            var settings = options || {};
+
+            if (this.lenis) {
+                this.lenis.scrollTo(target, settings);
+                return;
+            }
+
+            var topValue = 0;
+            if (typeof target === "number") {
+                topValue = target;
+            } else if (typeof target === "string") {
+                if (target === "top" || target === "start") {
+                    topValue = 0;
+                } else {
+                    var stringTarget = document.querySelector(target);
+                    if (!stringTarget) return;
+                    topValue = stringTarget.getBoundingClientRect().top + this.getScrollY();
+                }
+            } else if (target && typeof target.getBoundingClientRect === "function") {
+                topValue = target.getBoundingClientRect().top + this.getScrollY();
+            } else {
+                return;
+            }
+
+            topValue += settings.offset || 0;
+            window.scrollTo({
+                top: topValue,
+                behavior: this.prefersReducedMotion ? "auto" : "smooth"
+            });
+        },
+        handleAnchorClick: function (event) {
+            var link = event.target.closest('a[href]');
+            if (!link) return;
+
+            var rawHref = link.getAttribute("href");
+            if (!rawHref || rawHref === "#" || rawHref.indexOf("javascript:") === 0) return;
+            if (link.hasAttribute("target") && link.getAttribute("target") === "_blank") return;
+            if (link.matches("[data-bs-toggle], [data-toggle], [role='tab'], [data-lenis-ignore-anchor]")) return;
+
+            var destination;
+            var currentLocation;
+            try {
+                destination = new URL(link.href, window.location.href);
+                currentLocation = new URL(window.location.href);
+            } catch (error) {
+                return;
+            }
+
+            if (!destination.hash || destination.hash.length <= 1) return;
+            if (destination.origin !== currentLocation.origin || destination.pathname !== currentLocation.pathname) return;
+
+            var target = document.querySelector(destination.hash);
+            if (!target) return;
+
+            event.preventDefault();
+
+            this.scrollTo(target, {
+                offset: -this.getHeaderOffset() - 16,
+                duration: 1.05,
+                lerp: this.isTouchDevice ? 0.16 : 0.11,
+                lock: false,
+                force: true
+            });
+
+            if (window.history && typeof window.history.pushState === "function") {
+                window.history.pushState(null, "", destination.hash);
+            } else {
+                window.location.hash = destination.hash;
+            }
+        },
+        init: function () {
+            var self = this;
+            if (this.isReady) return;
+
+            this.markPreventElements(document);
+            document.documentElement.style.scrollBehavior = "auto";
+
+            document.addEventListener("click", function (event) {
+                self.handleAnchorClick(event);
+            }, false);
+
+            if (this.prefersReducedMotion || typeof window.Lenis === "undefined") {
+                this.isReady = true;
+                return;
+            }
+
+            this.lenis = new window.Lenis({
+                lerp: this.isTouchDevice ? 0.14 : 0.095,
+                smoothWheel: true,
+                syncTouch: this.isTouchDevice,
+                syncTouchLerp: this.isTouchDevice ? 0.13 : 0.08,
+                touchInertiaExponent: this.isTouchDevice ? 1.35 : 1.45,
+                touchMultiplier: 1,
+                wheelMultiplier: this.isTouchDevice ? 1 : 0.95,
+                gestureOrientation: "vertical",
+                autoResize: true,
+                overscroll: true,
+                autoRaf: false,
+                prevent: function (node) {
+                    return !!(node && (
+                        (typeof node.closest === "function" && node.closest(self.excludedSelector)) ||
+                        node.tagName === "IFRAME"
+                    ));
+                }
+            });
+
+            this.lenis.on("scroll", function () {
+                self.emitScroll();
+                if (window.ScrollTrigger && typeof window.ScrollTrigger.update === "function") {
+                    window.ScrollTrigger.update();
+                }
+            });
+
+            if (window.gsap && typeof window.gsap.ticker !== "undefined") {
+                this.ticker = function (time) {
+                    self.lenis.raf(time * 1000);
+                };
+                window.gsap.ticker.add(this.ticker);
+                window.gsap.ticker.lagSmoothing(0);
+            } else {
+                this.ticker = function (time) {
+                    self.lenis.raf(time);
+                    window.requestAnimationFrame(self.ticker);
+                };
+                window.requestAnimationFrame(this.ticker);
+            }
+
+            if (window.location.hash && window.location.hash.length > 1) {
+                window.addEventListener("load", function () {
+                    var hashTarget = document.querySelector(window.location.hash);
+                    if (!hashTarget) return;
+
+                    window.setTimeout(function () {
+                        self.scrollTo(hashTarget, {
+                            offset: -self.getHeaderOffset() - 16,
+                            immediate: true,
+                            force: true
+                        });
+                    }, 120);
+                });
+            }
+
+            if (typeof MutationObserver !== "undefined") {
+                this.observer = new MutationObserver(function (mutations) {
+                    mutations.forEach(function (mutation) {
+                        mutation.addedNodes.forEach(function (node) {
+                            if (node.nodeType === 1) {
+                                self.markPreventElements(node);
+                            }
+                        });
+                    });
+                });
+
+                this.observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            }
+
+            window.addEventListener("load", function () {
+                self.refresh();
+                window.setTimeout(function () {
+                    self.refresh();
+                }, 250);
+            });
+
+            window.addEventListener("resize", function () {
+                self.refresh();
+            });
+
+            this.isReady = true;
+        }
+    };
+
+    window.OETSmoothScroll = scrollManager;
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", function () {
+            scrollManager.init();
+        });
+    } else {
+        scrollManager.init();
+    }
+})(window, document);
+
 
 
 (function($){
     "use strict";
+
+    var scrollManager = window.OETSmoothScroll || null;
+    var getScrollTop = function () {
+      if (scrollManager && typeof scrollManager.getScrollY === "function") {
+        return scrollManager.getScrollY();
+      }
+
+      return $(window).scrollTop();
+    };
+    var bindScrollEvent = function (callback) {
+      if (scrollManager && scrollManager.lenis && typeof scrollManager.onScroll === "function") {
+        scrollManager.onScroll(callback);
+      } else {
+        $(window).on("scroll", callback);
+      }
+
+      callback();
+    };
+    var pauseSmoothScroll = function () {
+      if (scrollManager && typeof scrollManager.stop === "function") {
+        scrollManager.stop();
+      }
+    };
+    var resumeSmoothScroll = function () {
+      if (!scrollManager || typeof scrollManager.start !== "function") {
+        return;
+      }
+
+      var hasOpenOverlay = $(".vl-offcanvas").hasClass("vl-offcanvas-open") ||
+        $(".vl-header-search-bar").hasClass("vl-search-open") ||
+        $(".mfp-wrap").hasClass("mfp-ready");
+
+      if (!hasOpenOverlay) {
+        scrollManager.start();
+      }
+    };
 
     /*----------------------------------------*/
     /*  02.back-to-top
     /*----------------------------------------*/
 
     var progressPath = document.querySelector(".progress-wrap path");
-    var pathLength = progressPath.getTotalLength();
-    progressPath.style.transition = progressPath.style.WebkitTransition =
-      "none";
-    progressPath.style.strokeDasharray = pathLength + " " + pathLength;
-    progressPath.style.strokeDashoffset = pathLength;
-    progressPath.getBoundingClientRect();
-    progressPath.style.transition = progressPath.style.WebkitTransition =
-      "stroke-dashoffset 10ms linear";
-    var updateProgress = function () {
-      var scroll = $(window).scrollTop();
-      var height = $(document).height() - $(window).height();
-      var progress = pathLength - (scroll * pathLength) / height;
-      progressPath.style.strokeDashoffset = progress;
-    };
-    updateProgress();
-    $(window).scroll(updateProgress);
-    var offset = 50;
-    var duration = 550;
-    jQuery(window).on("scroll", function () {
-      if (jQuery(this).scrollTop() > offset) {
-        jQuery(".progress-wrap").addClass("active-progress");
-      } else {
-        jQuery(".progress-wrap").removeClass("active-progress");
-      }
-    });
-    jQuery(".progress-wrap").on("click", function (event) {
-      event.preventDefault();
-      jQuery("html, body").animate({ scrollTop: 0 }, duration);
-      return false;
-    });
+    if (progressPath) {
+      var pathLength = progressPath.getTotalLength();
+      progressPath.style.transition = progressPath.style.WebkitTransition =
+        "none";
+      progressPath.style.strokeDasharray = pathLength + " " + pathLength;
+      progressPath.style.strokeDashoffset = pathLength;
+      progressPath.getBoundingClientRect();
+      progressPath.style.transition = progressPath.style.WebkitTransition =
+        "stroke-dashoffset 10ms linear";
+      var offset = 50;
+      var updateProgress = function () {
+        var scroll = getScrollTop();
+        var height = Math.max($(document).height() - $(window).height(), 1);
+        var progress = pathLength - (scroll * pathLength) / height;
+        progressPath.style.strokeDashoffset = progress;
+
+        if (scroll > offset) {
+          jQuery(".progress-wrap").addClass("active-progress");
+        } else {
+          jQuery(".progress-wrap").removeClass("active-progress");
+        }
+      };
+      bindScrollEvent(updateProgress);
+      jQuery(".progress-wrap").on("click", function (event) {
+        event.preventDefault();
+        if (scrollManager && typeof scrollManager.scrollTo === "function") {
+          scrollManager.scrollTo(0, {
+            duration: 1.05,
+            lerp: scrollManager.isTouchDevice ? 0.16 : 0.11,
+            force: true
+          });
+        } else {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+        return false;
+      });
+    }
      
 
     /*----------------------------------------*/
     /*  03.stiky js
     /*----------------------------------------*/
 
-    var windowOn = $(window);
-    windowOn.on('scroll', function () {
-      var scroll = windowOn.scrollTop();
+    bindScrollEvent(function () {
+      var scroll = getScrollTop();
       if (scroll < 100) {
         $("#vl-header-sticky").removeClass("header-sticky");
       } else {
@@ -147,11 +470,13 @@ sal();
     $(".vl-offcanvas-toggle").on('click',function(){
         $(".vl-offcanvas").addClass("vl-offcanvas-open");
         $(".vl-offcanvas-overlay").addClass("vl-offcanvas-overlay-open");
+        pauseSmoothScroll();
     });
 
     $(".vl-offcanvas-close-toggle,.vl-offcanvas-overlay").on('click', function(){
         $(".vl-offcanvas").removeClass("vl-offcanvas-open");
         $(".vl-offcanvas-overlay").removeClass("vl-offcanvas-overlay-open");
+        resumeSmoothScroll();
     });
 
 
@@ -167,11 +492,13 @@ sal();
     $(".vl-search-toggle").on('click', function(){
       $(".vl-header-search-bar").addClass("vl-search-open");
       $(".vl-offcanvas-overlay").addClass("vl-offcanvas-overlay-open");
+      pauseSmoothScroll();
     });
 
     $(".vl-search-close,.vl-offcanvas-overlay").on('click', function(){
       $(".vl-header-search-bar").removeClass("vl-search-open");
       $(".vl-offcanvas-overlay").removeClass("vl-offcanvas-overlay-open");
+      resumeSmoothScroll();
     });
 
 
@@ -189,7 +516,11 @@ sal();
     /*----------------------------------------*/
 
     $('.popup-image').magnificPopup({
-        type: 'image'
+        type: 'image',
+        callbacks: {
+          open: pauseSmoothScroll,
+          close: resumeSmoothScroll
+        }
     });
 
     /*----------------------------------------*/
@@ -197,7 +528,11 @@ sal();
     /*----------------------------------------*/
 
     $('.popup-video').magnificPopup({
-      type: 'iframe'
+      type: 'iframe',
+      callbacks: {
+        open: pauseSmoothScroll,
+        close: resumeSmoothScroll
+      }
     });
 
     /*----------------------------------------*/
@@ -205,16 +540,24 @@ sal();
     /*----------------------------------------*/
 
     $('select').niceSelect();
+    if (scrollManager && typeof scrollManager.markPreventElements === "function") {
+      scrollManager.markPreventElements(document);
+    }
 
     
     /*----------------------------------------*/
     /*  10. preloader
     /*----------------------------------------*/
-      $(window).on("load", function (event) {
-        setTimeout(function () {
-          $(".preloader").fadeToggle();
-        }, 200);
-      
+      var hidePreloader = function () {
+        $(".preloader").fadeOut(200);
+      };
+
+      $(window).on("load", function () {
+        setTimeout(hidePreloader, 200);
+      });
+
+      $(document).ready(function () {
+        setTimeout(hidePreloader, 1200);
       });
 
 
@@ -323,7 +666,43 @@ sal();
     /*  14. portfolioActive (home one)
     /*----------------------------------------*/
     
-      var swiper = new Swiper(".portfolioActive", {
+  
+    /*----------------------------------------*/
+    /*  about testimonial slider (about page)
+    /*----------------------------------------*/
+
+    var swiper = new Swiper(".about-testimonial-swiper", {
+        slidesPerView: 5,
+        spaceBetween: 30,
+        centeredSlides: true,
+        loop: true,
+        keyboard: {
+            enabled: true,
+        },
+        pagination: {
+            el: ".about-swiper-pagination1",
+            clickable: true,
+        },
+        autoplay: {
+          delay: 2500,
+          disableOnInteraction: false,
+        },
+        breakpoints: {
+            0: {
+              slidesPerView: 1,
+            },
+            768: {
+              slidesPerView: 2,
+            },
+            992: {
+              slidesPerView: 3,
+            },
+            1400: {
+              slidesPerView: 5,
+            }
+        },
+    });
+    var swiper = new Swiper(".portfolioActive", {
         slidesPerView: 3,
         spaceBetween: 30,
         navigation: {
